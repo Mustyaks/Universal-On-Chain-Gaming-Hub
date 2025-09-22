@@ -1,0 +1,123 @@
+version: '3.8'
+
+services:
+  # Starknet Local Node (Katana)
+  starknet-node:
+    image: ghcr.io/dojoengine/dojo:latest
+    container_name: universal-gaming-hub-starknet
+    ports:
+      - "5050:5050"  # Katana RPC port
+      - "8080:8080"  # Torii GraphQL port
+    command: >
+      katana --host 0.0.0.0 --port 5050
+      --accounts 10
+      --seed 0
+      --gas-price 1000000000
+    volumes:
+      - starknet_data:/root/.katana
+    networks:
+      - gaming-hub-network
+
+  # Bitcoin Regtest Node
+  bitcoin-node:
+    image: ruimarinho/bitcoin-core:latest
+    container_name: universal-gaming-hub-bitcoin
+    ports:
+      - "18443:18443"  # Bitcoin regtest RPC port
+      - "18444:18444"  # Bitcoin regtest P2P port
+    command: >
+      bitcoind -regtest
+      -server=1
+      -rpcallowip=0.0.0.0/0
+      -rpcbind=0.0.0.0:18443
+      -rpcuser=bitcoin
+      -rpcpassword=bitcoin123
+      -fallbackfee=0.0002
+      -zmqpubrawblock=tcp://0.0.0.0:28332
+      -zmqpubrawtx=tcp://0.0.0.0:28333
+    volumes:
+      - bitcoin_data:/home/bitcoin/.bitcoin
+    networks:
+      - gaming-hub-network
+
+  # Redis for caching and pub/sub
+  redis:
+    image: redis:7-alpine
+    container_name: universal-gaming-hub-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - gaming-hub-network
+
+  # PostgreSQL for application data
+  postgres:
+    image: postgres:15-alpine
+    container_name: universal-gaming-hub-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: gaming_hub
+      POSTGRES_USER: gaming_hub
+      POSTGRES_PASSWORD: gaming_hub_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    networks:
+      - gaming-hub-network
+
+  # GraphQL API Gateway
+  api-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: universal-gaming-hub-api
+    ports:
+      - "4000:4000"
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://gaming_hub:gaming_hub_password@postgres:5432/gaming_hub
+      REDIS_URL: redis://redis:6379
+      STARKNET_RPC_URL: http://starknet-node:5050
+      BITCOIN_RPC_URL: http://bitcoin:bitcoin123@bitcoin-node:18443
+    depends_on:
+      - postgres
+      - redis
+      - starknet-node
+      - bitcoin-node
+    volumes:
+      - ./src:/app/src
+      - ./package.json:/app/package.json
+    networks:
+      - gaming-hub-network
+
+  # Frontend Development Server
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: universal-gaming-hub-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      REACT_APP_API_URL: http://localhost:4000/graphql
+      REACT_APP_STARKNET_RPC_URL: http://localhost:5050
+    depends_on:
+      - api-gateway
+    volumes:
+      - ./src/frontend:/app/src
+      - ./public:/app/public
+    networks:
+      - gaming-hub-network
+
+volumes:
+  starknet_data:
+  bitcoin_data:
+  redis_data:
+  postgres_data:
+
+networks:
+  gaming-hub-network:
+    driver: bridge
