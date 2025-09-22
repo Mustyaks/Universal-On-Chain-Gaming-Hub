@@ -11,20 +11,30 @@
   - Set up development environment with Docker compose for local blockchain nodes
   - _Requirements: 6.1, 7.1_
 
-- [ ] 2. Implement Cairo smart contracts for marketplace and achievements
-  - [ ] 2.1 Create UniversalMarketplace smart contract
+- [x] 2. Implement Cairo smart contracts for marketplace and achievements
+
+
+
+
+  - [x] 2.1 Create UniversalMarketplace smart contract
+
+
     - Write Cairo contract with listing creation, purchase, and transfer functions
     - Implement access controls and ownership validation
     - Add events for marketplace activities
     - _Requirements: 3.1, 3.2, 3.3_
 
-  - [ ] 2.2 Create AchievementBadges NFT contract
+
+  - [x] 2.2 Create AchievementBadges NFT contract
+
     - Write Cairo contract for minting achievement badge NFTs
     - Implement metadata storage and retrieval functions
     - Add rarity-based minting logic
     - _Requirements: 2.4_
 
-  - [ ] 2.3 Write comprehensive smart contract tests
+  - [x] 2.3 Write comprehensive smart contract tests
+
+
     - Create unit tests for all contract functions using Cairo test framework
     - Test edge cases and error conditions
     - Verify gas optimization and security measures

@@ -1,0 +1,24 @@
+[package]
+name = "universal_gaming_hub_contracts"
+version = "0.1.0"
+edition = "2023_11"
+
+[dependencies]
+starknet = "2.4.0"
+
+[dev-dependencies]
+snforge_std = { git = "https://github.com/foundry-rs/starknet-foundry", tag = "v0.12.0" }
+
+[[target.starknet-contract]]
+sierra = true
+casm = true
+
+[tool.snforge]
+# Directory containing tests
+test = "tests"
+# Exit first on failed test
+exit_first = true
+# Use fuzzing with 256 runs
+fuzzer_runs = 256
+# Seed for fuzzing
+fuzzer_seed = 12345
