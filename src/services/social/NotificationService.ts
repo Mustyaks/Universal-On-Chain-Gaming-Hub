@@ -163,7 +163,7 @@ export class NotificationService implements INotificationService {
   ): Promise<void> {
     const notifications: Notification[] = playerIds.map(playerId => ({
       ...notificationTemplate,
-      id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      id: `notif_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`,
       playerId,
       read: false,
       createdAt: Date.now()
@@ -244,7 +244,7 @@ export class NotificationService implements INotificationService {
       await this.db.updateOne('notification_preferences', existing.id, preferences);
     } else {
       await this.db.insertOne('notification_preferences', {
-        id: `prefs_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        id: `prefs_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`,
         playerId,
         friendRequests: true,
         achievements: true,

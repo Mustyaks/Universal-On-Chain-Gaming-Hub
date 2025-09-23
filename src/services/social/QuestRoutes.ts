@@ -10,19 +10,19 @@ export function createQuestRoutes(questController: QuestController): Router {
   const router = Router();
 
   // Quest management routes
-  router.post('/quests', questController.createQuest.bind(questController));
-  router.get('/quests', questController.getActiveQuests.bind(questController));
-  router.get('/quests/stats', questController.getQuestStats.bind(questController));
-  router.get('/quests/discovery', questController.getQuestDiscovery.bind(questController));
+  router.post('/quests', (req, res) => questController.createQuest(req as any, res));
+  router.get('/quests', (req, res) => questController.getActiveQuests(req as any, res));
+  router.get('/quests/stats', (req, res) => questController.getQuestStats(req, res));
+  router.get('/quests/discovery', (req, res) => questController.getQuestDiscovery(req as any, res));
   
   // Quest participation routes
-  router.post('/quests/:questId/join', questController.joinQuest.bind(questController));
-  router.put('/quests/:questId/progress', questController.updateProgress.bind(questController));
-  router.get('/quests/participation', questController.getPlayerParticipation.bind(questController));
+  router.post('/quests/:questId/join', (req, res) => questController.joinQuest(req as any, res));
+  router.put('/quests/:questId/progress', (req, res) => questController.updateProgress(req as any, res));
+  router.get('/quests/participation', (req, res) => questController.getPlayerParticipation(req as any, res));
   
   // Quest leaderboard and completion
-  router.get('/quests/:questId/leaderboard', questController.getQuestLeaderboard.bind(questController));
-  router.post('/quests/:questId/complete', questController.completeQuest.bind(questController));
+  router.get('/quests/:questId/leaderboard', (req, res) => questController.getQuestLeaderboard(req, res));
+  router.post('/quests/:questId/complete', (req, res) => questController.completeQuest(req, res));
 
   return router;
 }

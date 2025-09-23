@@ -71,7 +71,7 @@ export class QuestService {
         // Validate quest data
         this.validateQuestData(questData);
 
-        const questId = `quest_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const questId = `quest_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
 
         const quest: CommunityQuest = {
             id: questId,
@@ -171,7 +171,7 @@ export class QuestService {
 
         // Send notification
         await this.notifications.sendNotification(playerId, {
-            id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            id: `notif_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`,
             playerId,
             type: 'QUEST',
             title: 'Quest Joined',
@@ -227,7 +227,7 @@ export class QuestService {
 
             // Send progress notification
             await this.notifications.sendNotification(playerId, {
-                id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                id: `notif_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`,
                 playerId,
                 type: 'QUEST',
                 title: 'Quest Progress',
@@ -250,7 +250,7 @@ export class QuestService {
             // Send completion notification
             const quest = await this.db.findOne<CommunityQuest>('community_quests', { id: questId });
             await this.notifications.sendNotification(playerId, {
-                id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                id: `notif_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`,
                 playerId,
                 type: 'QUEST',
                 title: 'Quest Completed!',
@@ -415,6 +415,172 @@ export class QuestService {
     }
 
     /**
+     * Get quest leaderboard
+     */
+    async getQuestLeaderboard(questId: string, limit: number = 10): Promise<Array<{
+        playerId: string;
+        displayName: string;
+        progress: number;
+        completedAt?: number;
+        rank: number;
+    }>> {
+        const cacheKey = `quest_leaderboard:${questId}:${limit}`;
+        const cached = await this.cache.get<any[]>(cacheKey);
+        if (cached) {
+            return cached;
+        }
+
+        // Get all participations for this quest
+        const participations = await this.db.findMany<QuestParticipation>('quest_participation', {
+            questId
+        });
+
+        // Get player profiles for display names
+        const playerIds = participations.map(p => p.playerId);
+        const profiles = await this.db.findMany<UnifiedProfile>('profiles', {
+            playerId: { $in: playerIds }
+        });
+        const profileMap = new Map(profiles.map(p => [p.playerId, p]));
+
+        // Calculate progress and sort
+        const leaderboardEntries = participations.map(participation => {
+            const totalProgress = participation.progress.reduce((sum, p) => sum + p.currentValue, 0);
+            const maxProgress = participation.progress.reduce((sum, p) => sum + p.targetValue, 0);
+            const progressPercentage = maxProgress > 0 ? (totalProgress / maxProgress) * 100 : 0;
+
+            return {
+                playerId: participation.playerId,
+                displayName: profileMap.get(participation.playerId)?.displayName || 'Unknown Player',
+                progress: progressPercentage,
+                completedAt: participation.completedAt,
+                completed: participation.completed
+            };
+        });
+
+        // Sort by completion status first, then by progress, then by completion time
+        leaderboardEntries.sort((a, b) => {
+            if (a.completed && !b.completed) return -1;
+            if (!a.completed && b.completed) return 1;
+            if (a.completed && b.completed) {
+                return (a.completedAt || 0) - (b.completedAt || 0);
+            }
+            return b.progress - a.progress;
+        });
+
+        // Add ranks and limit results
+        const leaderboard = leaderboardEntries.slice(0, limit).map((entry, index) => {
+            const result: {
+                playerId: string;
+                displayName: string;
+                progress: number;
+                completedAt?: number;
+                rank: number;
+            } = {
+                playerId: entry.playerId,
+                displayName: entry.displayName,
+                progress: entry.progress,
+                rank: index + 1
+            };
+            
+            if (entry.completedAt !== undefined) {
+                result.completedAt = entry.completedAt;
+            }
+            
+            return result;
+        });
+
+        // Cache for 5 minutes
+        await this.cache.set(cacheKey, leaderboard, 300);
+
+        return leaderboard;
+    }
+
+    /**
+     * Get recommended quests for a player
+     */
+    async getRecommendedQuests(playerId: string, limit: number = 5): Promise<CommunityQuest[]> {
+        const cacheKey = `recommended_quests:${playerId}:${limit}`;
+        const cached = await this.cache.get<CommunityQuest[]>(cacheKey);
+        if (cached) {
+            return cached;
+        }
+
+        // Get player's profile and participation history
+        const [profile, participationHistory] = await Promise.all([
+            this.db.findOne<UnifiedProfile>('profiles', { playerId }),
+            this.db.findMany<QuestParticipation>('quest_participation', { playerId })
+        ]);
+
+        if (!profile) {
+            return [];
+        }
+
+        // Get all active quests that the player hasn't joined
+        const participatedQuestIds = participationHistory.map(p => p.questId);
+        const allActiveQuests = await this.getActiveQuests();
+        const availableQuests = allActiveQuests.filter(quest => 
+            !participatedQuestIds.includes(quest.id)
+        );
+
+        // Simple recommendation algorithm based on:
+        // 1. Player's achievement count (prefer quests matching their skill level)
+        // 2. Quest difficulty
+        // 3. Quest category preferences (could be enhanced with player preferences)
+        const questsWithMetadata = await Promise.all(
+            availableQuests.map(async (quest) => {
+                const metadata = await this.db.findOne<any>('quest_metadata', { questId: quest.id });
+                return { quest, metadata };
+            })
+        );
+
+        // Score quests based on player profile
+        const scoredQuests = questsWithMetadata.map(({ quest, metadata }) => {
+            let score = 0;
+
+            // Base score for active quests
+            score += 10;
+
+            // Prefer quests with appropriate difficulty
+            if (metadata) {
+                const playerLevel = this.getPlayerLevel(profile.totalAchievements);
+                if (metadata.difficulty === 'EASY' && playerLevel <= 2) score += 20;
+                else if (metadata.difficulty === 'MEDIUM' && playerLevel >= 2 && playerLevel <= 4) score += 20;
+                else if (metadata.difficulty === 'HARD' && playerLevel >= 4) score += 20;
+                else if (metadata.difficulty === 'LEGENDARY' && playerLevel >= 5) score += 15;
+
+                // Prefer achievement-based quests for active players
+                if (metadata.category === 'ACHIEVEMENT' && profile.totalAchievements > 5) score += 10;
+                
+                // Prefer social quests for players with friends
+                if (metadata.category === 'SOCIAL') score += 5;
+            }
+
+            // Prefer quests with fewer participants (less crowded)
+            const participantCount = quest.participants.length;
+            if (participantCount < 10) score += 5;
+            else if (participantCount > 50) score -= 5;
+
+            // Prefer newer quests
+            const questAge = Date.now() - quest.startDate;
+            const daysSinceStart = questAge / (24 * 60 * 60 * 1000);
+            if (daysSinceStart < 7) score += 5; // New quests get bonus
+
+            return { quest, score };
+        });
+
+        // Sort by score and return top recommendations
+        const recommendations = scoredQuests
+            .sort((a, b) => b.score - a.score)
+            .slice(0, limit)
+            .map(item => item.quest);
+
+        // Cache for 30 minutes
+        await this.cache.set(cacheKey, recommendations, 1800);
+
+        return recommendations;
+    }
+
+    /**
      * Complete a quest (admin function)
      */
     async completeQuest(questId: string): Promise<void> {
@@ -434,7 +600,7 @@ export class QuestService {
 
         for (const participation of participations) {
             await this.notifications.sendNotification(participation.playerId, {
-                id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                id: `notif_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`,
                 playerId: participation.playerId,
                 type: 'QUEST',
                 title: 'Quest Ended',
@@ -524,6 +690,15 @@ export class QuestService {
         });
     }
 
+    private getPlayerLevel(totalAchievements: number): number {
+        if (totalAchievements < 5) return 1;
+        if (totalAchievements < 15) return 2;
+        if (totalAchievements < 30) return 3;
+        if (totalAchievements < 50) return 4;
+        if (totalAchievements < 100) return 5;
+        return 6; // Master level
+    }
+
     private async notifyEligiblePlayers(quest: CommunityQuest): Promise<void> {
         // Get all players (in a real implementation, this would be more targeted)
         const players = await this.db.findMany<UnifiedProfile>('profiles', {
@@ -535,7 +710,7 @@ export class QuestService {
             const eligible = await this.checkPlayerEligibility(quest, player.playerId);
             if (eligible) {
                 await this.notifications.sendNotification(player.playerId, {
-                    id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                    id: `notif_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`,
                     playerId: player.playerId,
                     type: 'QUEST',
                     title: 'New Quest Available',

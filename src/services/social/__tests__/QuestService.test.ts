@@ -525,6 +525,110 @@ describe('QuestService', () => {
     });
   });
 
+  describe('getQuestLeaderboard', () => {
+    let questId: string;
+
+    beforeEach(async () => {
+      questId = await questService.createQuest(testQuestData);
+      
+      // Add multiple players with different progress
+      await questService.joinQuest(questId, 'player1');
+      await questService.updateQuestProgress('player1', questId, 0, 5); // Complete
+      
+      // Add another test player
+      const testPlayer2: UnifiedProfile = {
+        ...testPlayer,
+        playerId: 'player2',
+        displayName: 'TestPlayer2'
+      };
+      mockDb.seed('profiles', [testPlayer, testPlayer2]);
+      
+      await questService.joinQuest(questId, 'player2');
+      await questService.updateQuestProgress('player2', questId, 0, 3); // Partial progress
+    });
+
+    it('should return quest leaderboard', async () => {
+      const leaderboard = await questService.getQuestLeaderboard(questId, 10);
+
+      expect(leaderboard).toHaveLength(2);
+      expect(leaderboard[0]?.playerId).toBe('player1'); // Completed first
+      expect(leaderboard[0]?.progress).toBe(100);
+      expect(leaderboard[0]?.rank).toBe(1);
+      expect(leaderboard[1]?.playerId).toBe('player2'); // Partial progress
+      expect(leaderboard[1]?.progress).toBe(60); // 3/5 = 60%
+      expect(leaderboard[1]?.rank).toBe(2);
+    });
+
+    it('should limit results correctly', async () => {
+      const leaderboard = await questService.getQuestLeaderboard(questId, 1);
+      expect(leaderboard).toHaveLength(1);
+      expect(leaderboard[0]?.playerId).toBe('player1');
+    });
+
+    it('should return cached results on subsequent calls', async () => {
+      const leaderboard1 = await questService.getQuestLeaderboard(questId, 10);
+      const leaderboard2 = await questService.getQuestLeaderboard(questId, 10);
+
+      expect(leaderboard1).toEqual(leaderboard2);
+    });
+  });
+
+  describe('getRecommendedQuests', () => {
+    let questId1: string;
+    let questId2: string;
+
+    beforeEach(async () => {
+      // Create quests with different difficulties
+      questId1 = await questService.createQuest({
+        ...testQuestData,
+        title: 'Easy Quest',
+        category: 'ACHIEVEMENT',
+        difficulty: 'EASY'
+      });
+
+      questId2 = await questService.createQuest({
+        ...testQuestData,
+        title: 'Hard Quest',
+        category: 'SOCIAL',
+        difficulty: 'HARD'
+      });
+    });
+
+    it('should return recommended quests for a player', async () => {
+      const recommendations = await questService.getRecommendedQuests('player1', 5);
+
+      expect(recommendations).toHaveLength(2);
+      expect(recommendations.map(q => q.id)).toContain(questId1);
+      expect(recommendations.map(q => q.id)).toContain(questId2);
+    });
+
+    it('should exclude quests player has already joined', async () => {
+      await questService.joinQuest(questId1, 'player1');
+
+      const recommendations = await questService.getRecommendedQuests('player1', 5);
+
+      expect(recommendations).toHaveLength(1);
+      expect(recommendations[0]?.id).toBe(questId2);
+    });
+
+    it('should return empty array for non-existent player', async () => {
+      const recommendations = await questService.getRecommendedQuests('nonexistent', 5);
+      expect(recommendations).toHaveLength(0);
+    });
+
+    it('should limit results correctly', async () => {
+      const recommendations = await questService.getRecommendedQuests('player1', 1);
+      expect(recommendations).toHaveLength(1);
+    });
+
+    it('should return cached results on subsequent calls', async () => {
+      const recommendations1 = await questService.getRecommendedQuests('player1', 5);
+      const recommendations2 = await questService.getRecommendedQuests('player1', 5);
+
+      expect(recommendations1).toEqual(recommendations2);
+    });
+  });
+
   describe('completeQuest', () => {
     let questId: string;
 

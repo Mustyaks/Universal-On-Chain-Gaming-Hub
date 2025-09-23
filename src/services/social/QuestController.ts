@@ -256,9 +256,17 @@ export class QuestController {
                 return;
             }
 
-            // This would be implemented in QuestService
-            // For now, return a placeholder response
-            const leaderboard: unknown[] = []; // await this.questService.getQuestLeaderboard(questId, parseInt(_limit as string));
+            const limit = parseInt(_limit as string);
+            if (isNaN(limit) || limit < 1 || limit > 100) {
+                res.status(400).json({
+                    success: false,
+                    error: 'Limit must be a number between 1 and 100',
+                    timestamp: Date.now()
+                } as ApiResponse<null>);
+                return;
+            }
+
+            const leaderboard = await this.questService.getQuestLeaderboard(questId, limit);
 
             res.status(200).json({
                 success: true,
@@ -279,41 +287,59 @@ export class QuestController {
      */
     async getQuestDiscovery(req: AuthenticatedRequest, res: Response): Promise<void> {
         try {
-            const { playerId: _playerId } = req.user;
-            const { page = '1', limit = '20' } = req.query;
+            const { playerId } = req.user;
+            const { page = '1', limit = '20', recommended = 'false' } = req.query;
 
-            // Get recommended quests based on player activity
-            const quests = await this.questService.getActiveQuests({
-                // Could add recommendation logic here using _playerId
-            });
-
-            // Simple pagination
             const pageNum = parseInt(page as string);
             const limitNum = parseInt(limit as string);
-            const startIndex = (pageNum - 1) * limitNum;
-            const paginatedQuests = quests.slice(startIndex, startIndex + limitNum);
+
+            if (isNaN(pageNum) || pageNum < 1) {
+                res.status(400).json({
+                    success: false,
+                    error: 'Page must be a positive number',
+                    timestamp: Date.now()
+                } as ApiResponse<null>);
+                return;
+            }
+
+            if (isNaN(limitNum) || limitNum < 1 || limitNum > 50) {
+                res.status(400).json({
+                    success: false,
+                    error: 'Limit must be a number between 1 and 50',
+                    timestamp: Date.now()
+                } as ApiResponse<null>);
+                return;
+            }
+
+            let quests;
+            if (recommended === 'true') {
+                // Get personalized recommendations
+                quests = await this.questService.getRecommendedQuests(playerId, limitNum);
+            } else {
+                // Get all active quests with pagination
+                const allQuests = await this.questService.getActiveQuests();
+                const startIndex = (pageNum - 1) * limitNum;
+                quests = allQuests.slice(startIndex, startIndex + limitNum);
+            }
+
+            const response = recommended === 'true' ? {
+                quests,
+                recommended: true
+            } : {
+                quests,
+                pagination: {
+                    page: pageNum,
+                    limit: limitNum,
+                    total: (await this.questService.getActiveQuests()).length,
+                    hasNext: quests.length === limitNum
+                }
+            };
 
             res.status(200).json({
                 success: true,
-                data: {
-                    quests: paginatedQuests,
-                    pagination: {
-                        page: pageNum,
-                        limit: limitNum,
-                        total: quests.length,
-                        hasNext: startIndex + limitNum < quests.length
-                    }
-                },
+                data: response,
                 timestamp: Date.now()
-            } as ApiResponse<{
-                quests: typeof paginatedQuests;
-                pagination: {
-                    page: number;
-                    limit: number;
-                    total: number;
-                    hasNext: boolean;
-                };
-            }>);
+            } as ApiResponse<typeof response>);
         } catch (error) {
             res.status(500).json({
                 success: false,
