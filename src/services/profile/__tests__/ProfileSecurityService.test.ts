@@ -3,8 +3,8 @@
  */
 
 import { ProfileSecurityService, PrivacySettings } from '../ProfileSecurityService';
-import { DatabaseService, CacheService, EventService } from '@/types/services';
-import { UnifiedProfile } from '@/types/core';
+import { DatabaseService, CacheService, EventService } from '../../../types/services';
+import { UnifiedProfile } from '../../../types/core';
 
 // Mock implementations
 const mockDatabase: jest.Mocked<DatabaseService> = {

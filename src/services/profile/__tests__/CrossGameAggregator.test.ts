@@ -3,8 +3,8 @@
  */
 
 import { CrossGameAggregator, AggregatedPlayerData } from '../CrossGameAggregator';
-import { DatabaseService, CacheService, EventService, AggregationService } from '@/types/services';
-import { StandardizedGameData } from '@/types/core';
+import { DatabaseService, CacheService, EventService, AggregationService } from '../../../types/services';
+import { StandardizedGameData } from '../../../types/core';
 
 // Mock implementations
 const mockDatabase: jest.Mocked<DatabaseService> = {
