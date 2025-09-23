@@ -1,129 +1,34 @@
-/**
- * Base GameAdapter interface and abstract class for Dojo game integration
- * Implements standardized data normalization methods and plugin system
- */
-
-import {
-    GameAsset,
-    Achievement,
-    GameStatistics,
-    StandardizedGameData,
-    PlayerGameData,
-    GameHubError,
-    Timestamp
-} from '../../types/core';
-import { WebSocketGameClient, WebSocketGameClientConfig } from './WebSocketGameClient';
-import { EventEmitter } from 'events';
-
-// Enhanced GameAdapter interface with error handling and retry mechanisms
-export interface GameAdapter {
-    readonly gameId: string;
-    readonly gameName: string;
-    readonly version: string;
-    readonly supportedFeatures: GameFeature[];
-
-    // Core normalization methods
-    normalize(rawData: any): Promise<StandardizedGameData>;
-    fetchPlayerData(playerId: string): Promise<PlayerGameData>;
-
-    // Real-time updates
-    subscribeToUpdates(callback: (data: PlayerGameData) => void): Promise<void>;
-    unsubscribeFromUpdates(): Promise<void>;
-
-    // Asset validation
-    validateAsset(asset: GameAsset): Promise<boolean>;
-
-    // Health and connectivity
-    isHealthy(): Promise<boolean>;
-    getLastSyncTime(): Timestamp;
-
-    // Error handling
-    handleError(error: any): GameHubError;
-}
-
-export type GameFeature =
-    | 'ASSETS'
-    | 'ACHIEVEMENTS'
-    | 'STATISTICS'
-    | 'REAL_TIME_UPDATES'
-    | 'ASSET_TRADING';
-
-// Configuration interface for game adapters
-export interface GameAdapterConfig {
-    gameId: string;
-    gameName: string;
-    contractAddress: string;
-    rpcEndpoint: string;
-    wsEndpoint?: string;
-    retryConfig: RetryConfig;
-    cacheConfig: CacheConfig;
-}
-
-export interface RetryConfig {
-    maxRetries: number;
-    baseDelayMs: number;
-    maxDelayMs: number;
-    backoffMultiplier: number;
-}
-
-export interface CacheConfig {
-    ttlSeconds: number;
-    maxEntries: number;
-    enableCache: boolean;
-}
-
-// Abstract base class implementing common functionality
-export abstract class BaseGameAdapter extends EventEmitter implements GameAdapter {
-    protected config: GameAdapterConfig;
-    protected lastSyncTime: Timestamp = 0;
-    protected isConnected: boolean = false;
-    protected updateCallback?: (data: PlayerGameData) => void | undefined;
-    protected wsClient?: WebSocketGameClient;
-
-    constructor(config: GameAdapterConfig) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.BaseGameAdapter = void 0;
+const WebSocketGameClient_1 = require("./WebSocketGameClient");
+const events_1 = require("events");
+class BaseGameAdapter extends events_1.EventEmitter {
+    constructor(config) {
         super();
+        this.lastSyncTime = 0;
+        this.isConnected = false;
         this.config = config;
-        
-        // Initialize WebSocket client if endpoint is provided
         if (config.wsEndpoint) {
             this.initializeWebSocketClient();
         }
     }
-
-    get gameId(): string {
+    get gameId() {
         return this.config.gameId;
     }
-
-    get gameName(): string {
+    get gameName() {
         return this.config.gameName;
     }
-
-    get version(): string {
-        return '1.0.0'; // Override in subclasses
+    get version() {
+        return '1.0.0';
     }
-
-    get supportedFeatures(): GameFeature[] {
-        return ['ASSETS', 'ACHIEVEMENTS', 'STATISTICS']; // Override in subclasses
+    get supportedFeatures() {
+        return ['ASSETS', 'ACHIEVEMENTS', 'STATISTICS'];
     }
-
-    // Abstract methods that must be implemented by concrete adapters
-    abstract normalize(rawData: any): Promise<StandardizedGameData>;
-    abstract fetchRawPlayerData(playerId: string): Promise<any>;
-    abstract validateAsset(asset: GameAsset): Promise<boolean>;
-    abstract connectToGameNetwork(): Promise<void>;
-    abstract disconnectFromGameNetwork(): Promise<void>;
-
-    // Implemented methods with retry logic and error handling
-    async fetchPlayerData(playerId: string): Promise<PlayerGameData> {
-        const rawData = await this.executeWithRetry(
-            () => this.fetchRawPlayerData(playerId),
-            `fetchPlayerData-${playerId}`
-        );
-
+    async fetchPlayerData(playerId) {
+        const rawData = await this.executeWithRetry(() => this.fetchRawPlayerData(playerId), `fetchPlayerData-${playerId}`);
         const normalizedData = await this.normalize(rawData);
-
         this.lastSyncTime = Date.now();
-
         return {
             playerId,
             gameId: this.gameId,
@@ -132,54 +37,45 @@ export abstract class BaseGameAdapter extends EventEmitter implements GameAdapte
             syncedAt: this.lastSyncTime
         };
     }
-
-    async subscribeToUpdates(callback: (data: PlayerGameData) => void): Promise<void> {
+    async subscribeToUpdates(callback) {
         this.updateCallback = callback;
-
         if (this.supportedFeatures.includes('REAL_TIME_UPDATES')) {
             if (this.wsClient) {
                 await this.wsClient.connect();
                 this.setupWebSocketEventHandlers();
-            } else {
+            }
+            else {
                 await this.connectToGameNetwork();
             }
             this.isConnected = true;
         }
     }
-
-    async unsubscribeFromUpdates(): Promise<void> {
-        this.updateCallback = undefined as any;
-
+    async unsubscribeFromUpdates() {
+        this.updateCallback = undefined;
         if (this.isConnected) {
             if (this.wsClient) {
                 await this.wsClient.disconnect();
-            } else {
+            }
+            else {
                 await this.disconnectFromGameNetwork();
             }
             this.isConnected = false;
         }
     }
-
-    async isHealthy(): Promise<boolean> {
+    async isHealthy() {
         try {
-            // Basic health check - try to fetch a small piece of data
-            await this.executeWithRetry(
-                () => this.performHealthCheck(),
-                'health-check'
-            );
+            await this.executeWithRetry(() => this.performHealthCheck(), 'health-check');
             return true;
-        } catch (error) {
+        }
+        catch (error) {
             return false;
         }
     }
-
-    getLastSyncTime(): Timestamp {
+    getLastSyncTime() {
         return this.lastSyncTime;
     }
-
-    handleError(error: any): GameHubError {
+    handleError(error) {
         const timestamp = Date.now();
-
         if (error.code === 'NETWORK_ERROR') {
             return {
                 code: 'NETWORK_ERROR',
@@ -188,7 +84,6 @@ export abstract class BaseGameAdapter extends EventEmitter implements GameAdapte
                 timestamp
             };
         }
-
         if (error.code === 'DATA_INTEGRITY_ERROR') {
             return {
                 code: 'DATA_INTEGRITY_ERROR',
@@ -197,7 +92,6 @@ export abstract class BaseGameAdapter extends EventEmitter implements GameAdapte
                 timestamp
             };
         }
-
         return {
             code: 'EXTERNAL_SERVICE_ERROR',
             message: `Unknown error in ${this.gameName}: ${error.message}`,
@@ -205,69 +99,44 @@ export abstract class BaseGameAdapter extends EventEmitter implements GameAdapte
             timestamp
         };
     }
-
-    // Protected utility methods
-    protected async executeWithRetry<T>(
-        operation: () => Promise<T>,
-        operationName: string
-    ): Promise<T> {
+    async executeWithRetry(operation, operationName) {
         const { maxRetries, baseDelayMs, maxDelayMs, backoffMultiplier } = this.config.retryConfig;
-
-        let lastError: any;
-
+        let lastError;
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
             try {
                 return await operation();
-            } catch (error) {
+            }
+            catch (error) {
                 lastError = error;
-
                 if (attempt === maxRetries) {
                     throw this.handleError(error);
                 }
-
-                const delay = Math.min(
-                    baseDelayMs * Math.pow(backoffMultiplier, attempt),
-                    maxDelayMs
-                );
-
-                console.warn(
-                    `${this.gameName} adapter: ${operationName} failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms`,
-                    error
-                );
-
+                const delay = Math.min(baseDelayMs * Math.pow(backoffMultiplier, attempt), maxDelayMs);
+                console.warn(`${this.gameName} adapter: ${operationName} failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms`, error);
                 await this.sleep(delay);
             }
         }
-
         throw this.handleError(lastError);
     }
-
-    protected async sleep(ms: number): Promise<void> {
+    async sleep(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
-
-    protected async performHealthCheck(): Promise<void> {
-        // Override in subclasses for game-specific health checks
-        // Default implementation just checks if we can connect
+    async performHealthCheck() {
         if (this.config.rpcEndpoint) {
-            // Simple connectivity test
             const response = await fetch(this.config.rpcEndpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ method: 'eth_blockNumber', params: [], id: 1 })
             });
-
             if (!response.ok) {
                 throw new Error(`Health check failed: ${response.status}`);
             }
         }
     }
-
-    protected normalizeAssets(rawAssets: any[]): GameAsset[] {
+    normalizeAssets(rawAssets) {
         return rawAssets.map(asset => this.normalizeAsset(asset));
     }
-
-    protected normalizeAsset(rawAsset: any): GameAsset {
+    normalizeAsset(rawAsset) {
         return {
             id: rawAsset.id || rawAsset.token_id,
             gameId: this.gameId,
@@ -282,11 +151,10 @@ export abstract class BaseGameAdapter extends EventEmitter implements GameAdapte
                 rarity: rawAsset.rarity || this.determineRarity(rawAsset)
             },
             owner: rawAsset.owner,
-            tradeable: rawAsset.tradeable !== false // Default to true unless explicitly false
+            tradeable: rawAsset.tradeable !== false
         };
     }
-
-    protected normalizeAchievements(rawAchievements: any[]): Achievement[] {
+    normalizeAchievements(rawAchievements) {
         return rawAchievements.map(achievement => ({
             id: achievement.id,
             gameId: this.gameId,
@@ -299,8 +167,7 @@ export abstract class BaseGameAdapter extends EventEmitter implements GameAdapte
             nftBadgeId: achievement.nft_badge_id
         }));
     }
-
-    protected normalizeStatistics(rawStats: any): GameStatistics {
+    normalizeStatistics(rawStats) {
         return {
             gameId: this.gameId,
             playerId: rawStats.player_id,
@@ -310,31 +177,31 @@ export abstract class BaseGameAdapter extends EventEmitter implements GameAdapte
             customStats: rawStats.custom_stats || {}
         };
     }
-
-    private determineAssetType(rawAsset: any): 'NFT' | 'CURRENCY' | 'ITEM' {
-        if (rawAsset.type) return rawAsset.type;
-        if (rawAsset.token_id && rawAsset.contract_address) return 'NFT';
-        if (rawAsset.fungible || rawAsset.is_currency) return 'CURRENCY';
+    determineAssetType(rawAsset) {
+        if (rawAsset.type)
+            return rawAsset.type;
+        if (rawAsset.token_id && rawAsset.contract_address)
+            return 'NFT';
+        if (rawAsset.fungible || rawAsset.is_currency)
+            return 'CURRENCY';
         return 'ITEM';
     }
-
-    private determineRarity(rawAsset: any): 'COMMON' | 'RARE' | 'EPIC' | 'LEGENDARY' {
-        if (rawAsset.rarity) return rawAsset.rarity;
-
-        // Simple rarity determination based on attributes or other factors
+    determineRarity(rawAsset) {
+        if (rawAsset.rarity)
+            return rawAsset.rarity;
         const attributes = rawAsset.attributes || [];
-        if (attributes.length > 5) return 'LEGENDARY';
-        if (attributes.length > 3) return 'EPIC';
-        if (attributes.length > 1) return 'RARE';
+        if (attributes.length > 5)
+            return 'LEGENDARY';
+        if (attributes.length > 3)
+            return 'EPIC';
+        if (attributes.length > 1)
+            return 'RARE';
         return 'COMMON';
     }
-
-    // Real-time synchronization methods
-
-    protected initializeWebSocketClient(): void {
-        if (!this.config.wsEndpoint) return;
-
-        const wsConfig: WebSocketGameClientConfig = {
+    initializeWebSocketClient() {
+        if (!this.config.wsEndpoint)
+            return;
+        const wsConfig = {
             gameId: this.gameId,
             wsEndpoint: this.config.wsEndpoint,
             reconnectInterval: 5000,
@@ -342,65 +209,60 @@ export abstract class BaseGameAdapter extends EventEmitter implements GameAdapte
             heartbeatInterval: 30000,
             messageTimeout: 10000
         };
-
-        this.wsClient = new WebSocketGameClient(wsConfig);
+        this.wsClient = new WebSocketGameClient_1.WebSocketGameClient(wsConfig);
     }
-
-    protected setupWebSocketEventHandlers(): void {
-        if (!this.wsClient || !this.updateCallback) return;
-
-        this.wsClient.on('playerUpdate', async (data: any) => {
+    setupWebSocketEventHandlers() {
+        if (!this.wsClient || !this.updateCallback)
+            return;
+        this.wsClient.on('playerUpdate', async (data) => {
             try {
                 const playerData = await this.processWebSocketUpdate(data);
                 if (playerData && this.updateCallback) {
                     this.updateCallback(playerData);
                 }
-            } catch (error) {
+            }
+            catch (error) {
                 console.error(`Failed to process WebSocket update for ${this.gameId}:`, error);
                 this.emit('error', this.handleError(error));
             }
         });
-
-        this.wsClient.on('assetChange', async (data: any) => {
+        this.wsClient.on('assetChange', async (data) => {
             try {
                 const playerData = await this.processAssetChange(data);
                 if (playerData && this.updateCallback) {
                     this.updateCallback(playerData);
                 }
-            } catch (error) {
+            }
+            catch (error) {
                 console.error(`Failed to process asset change for ${this.gameId}:`, error);
                 this.emit('error', this.handleError(error));
             }
         });
-
-        this.wsClient.on('achievementEarned', async (data: any) => {
+        this.wsClient.on('achievementEarned', async (data) => {
             try {
                 const playerData = await this.processAchievementEarned(data);
                 if (playerData && this.updateCallback) {
                     this.updateCallback(playerData);
                 }
-            } catch (error) {
+            }
+            catch (error) {
                 console.error(`Failed to process achievement earned for ${this.gameId}:`, error);
                 this.emit('error', this.handleError(error));
             }
         });
-
-        this.wsClient.on('error', (error: GameHubError) => {
+        this.wsClient.on('error', (error) => {
             this.emit('error', error);
         });
-
         this.wsClient.on('disconnected', () => {
             this.isConnected = false;
             this.emit('disconnected');
         });
     }
-
-    protected async processWebSocketUpdate(data: any): Promise<PlayerGameData | null> {
+    async processWebSocketUpdate(data) {
         if (!data.playerId || !data.data) {
             console.warn('Invalid WebSocket update data:', data);
             return null;
         }
-
         try {
             const normalizedData = await this.normalize(data.data);
             return {
@@ -410,70 +272,54 @@ export abstract class BaseGameAdapter extends EventEmitter implements GameAdapte
                 normalizedData,
                 syncedAt: data.timestamp || Date.now()
             };
-        } catch (error) {
+        }
+        catch (error) {
             console.error('Failed to normalize WebSocket data:', error);
             return null;
         }
     }
-
-    protected async processAssetChange(data: any): Promise<PlayerGameData | null> {
+    async processAssetChange(data) {
         if (!data.playerId || !data.assetData) {
             console.warn('Invalid asset change data:', data);
             return null;
         }
-
         try {
-            // Fetch complete player data to get updated state
             const playerData = await this.fetchPlayerData(data.playerId);
             return playerData;
-        } catch (error) {
+        }
+        catch (error) {
             console.error('Failed to fetch player data after asset change:', error);
             return null;
         }
     }
-
-    protected async processAchievementEarned(data: any): Promise<PlayerGameData | null> {
+    async processAchievementEarned(data) {
         if (!data.playerId || !data.achievement) {
             console.warn('Invalid achievement earned data:', data);
             return null;
         }
-
         try {
-            // Fetch complete player data to get updated achievements
             const playerData = await this.fetchPlayerData(data.playerId);
             return playerData;
-        } catch (error) {
+        }
+        catch (error) {
             console.error('Failed to fetch player data after achievement earned:', error);
             return null;
         }
     }
-
-    /**
-     * Subscribe to real-time updates for a specific player
-     */
-    async subscribeToPlayerUpdates(playerId: string): Promise<void> {
+    async subscribeToPlayerUpdates(playerId) {
         if (this.wsClient && this.wsClient.isClientConnected()) {
             await this.wsClient.subscribeToPlayer(playerId);
         }
     }
-
-    /**
-     * Unsubscribe from real-time updates for a specific player
-     */
-    async unsubscribeFromPlayerUpdates(playerId: string): Promise<void> {
+    async unsubscribeFromPlayerUpdates(playerId) {
         if (this.wsClient && this.wsClient.isClientConnected()) {
             await this.wsClient.unsubscribeFromPlayer(playerId);
         }
     }
-
-    /**
-     * Get WebSocket connection status
-     */
-    getWebSocketStatus(): { connected: boolean; subscribedPlayers: number } | null {
+    getWebSocketStatus() {
         if (!this.wsClient) {
             return null;
         }
-
         const status = this.wsClient.getConnectionStatus();
         return {
             connected: status.connected,
@@ -481,3 +327,5 @@ export abstract class BaseGameAdapter extends EventEmitter implements GameAdapte
         };
     }
 }
+exports.BaseGameAdapter = BaseGameAdapter;
+//# sourceMappingURL=GameAdapter.js.map
