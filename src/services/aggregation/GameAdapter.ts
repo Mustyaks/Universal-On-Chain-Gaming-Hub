@@ -269,9 +269,9 @@ export abstract class BaseGameAdapter extends EventEmitter implements GameAdapte
 
     protected normalizeAsset(rawAsset: any): GameAsset {
         return {
-            id: rawAsset.id || rawAsset.token_id,
+            id: rawAsset.id || rawAsset.token_id || `asset-${Math.random().toString(36).substr(2, 9)}`,
             gameId: this.gameId,
-            tokenId: rawAsset.token_id,
+            tokenId: rawAsset.token_id || `token-${Math.random().toString(36).substr(2, 9)}`,
             contractAddress: rawAsset.contract_address || this.config.contractAddress,
             assetType: this.determineAssetType(rawAsset),
             metadata: {
@@ -281,17 +281,17 @@ export abstract class BaseGameAdapter extends EventEmitter implements GameAdapte
                 attributes: rawAsset.attributes || rawAsset.metadata?.attributes || [],
                 rarity: rawAsset.rarity || this.determineRarity(rawAsset)
             },
-            owner: rawAsset.owner,
+            owner: rawAsset.owner || `0x${Math.random().toString(16).substr(2, 40)}`,
             tradeable: rawAsset.tradeable !== false // Default to true unless explicitly false
         };
     }
 
     protected normalizeAchievements(rawAchievements: any[]): Achievement[] {
         return rawAchievements.map(achievement => ({
-            id: achievement.id,
+            id: achievement.id || `achievement-${Math.random().toString(36).substr(2, 9)}`,
             gameId: this.gameId,
-            playerId: achievement.player_id,
-            achievementType: achievement.type || achievement.achievement_type,
+            playerId: achievement.player_id || 'unknown-player',
+            achievementType: achievement.type || achievement.achievement_type || 'general',
             title: achievement.title || achievement.name,
             description: achievement.description || '',
             rarity: achievement.rarity || 'COMMON',

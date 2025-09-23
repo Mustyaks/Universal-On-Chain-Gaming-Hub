@@ -6,8 +6,6 @@
 import WebSocket from 'ws';
 import { EventEmitter } from 'events';
 import {
-    PlayerGameData,
-    StandardizedGameData,
     GameHubError,
     Timestamp
 } from '../../types/core';
