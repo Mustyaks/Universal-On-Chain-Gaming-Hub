@@ -4,6 +4,7 @@
  */
 
 import { EventEmitter } from 'events';
+import { createClient, RedisClientType } from 'redis';
 import { ErrorHandler } from './ErrorHandler';
 import {
   StandardizedGameData,
@@ -87,10 +88,12 @@ export interface CacheEntry<T = any> {
 
 export class CacheManager extends EventEmitter {
   private config: CacheConfig;
-  private redisClient: any; // Redis client type
+  private redisClient: RedisClientType;
   private metrics: CacheMetrics;
   private responseTimes: number[] = [];
   private maxResponseTimeSamples = 1000;
+  private metricsInterval?: NodeJS.Timeout;
+  private cleanupInterval?: NodeJS.Timeout;
 
   constructor(config: CacheConfig) {
     super();
@@ -105,6 +108,8 @@ export class CacheManager extends EventEmitter {
     try {
       await this.initializeRedis();
       await this.setupInvalidationStrategies();
+      this.startPerformanceMonitoring();
+      this.startCleanupScheduler();
       
       console.log('Cache manager initialized successfully');
       this.emit('cache:initialized');
@@ -258,15 +263,67 @@ export class CacheManager extends EventEmitter {
       strategy => strategy.triggers.includes(trigger)
     );
 
-    for (const strategy of strategies) {
+    const invalidationPromises = strategies.map(async (strategy) => {
       try {
         const pattern = this.buildInvalidationPattern(strategy.pattern, context);
         const deletedCount = await this.invalidatePattern(pattern);
         
         console.log(`Invalidated ${deletedCount} keys for strategy ${strategy.name} with trigger ${trigger}`);
         
+        return { strategy: strategy.name, deletedCount };
       } catch (error) {
         console.error(`Error invalidating cache for strategy ${strategy.name}:`, error);
+        return { strategy: strategy.name, deletedCount: 0, error };
+      }
+    });
+
+    const results = await Promise.allSettled(invalidationPromises);
+    
+    this.emit('cache:bulk_invalidation', { 
+      trigger, 
+      context, 
+      results: results.map(r => r.status === 'fulfilled' ? r.value : { error: r.reason })
+    });
+  }
+
+  /**
+   * Smart cache invalidation based on data relationships
+   */
+  async smartInvalidate(dataType: string, entityId: string, gameId?: string): Promise<void> {
+    const invalidationMap: Record<string, string[]> = {
+      'player_update': [
+        'player_data:*:{playerId}',
+        'aggregated_data:*:{playerId}',
+        'statistics:*:{playerId}'
+      ],
+      'asset_transfer': [
+        'game_assets:*:{playerId}',
+        'game_assets:*:{newOwnerId}',
+        'aggregated_data:*:{playerId}',
+        'aggregated_data:*:{newOwnerId}'
+      ],
+      'achievement_earned': [
+        'achievements:*:{playerId}',
+        'aggregated_data:*:{playerId}',
+        'statistics:*:{playerId}'
+      ],
+      'game_sync': [
+        'player_data:{gameId}:*',
+        'game_assets:{gameId}:*',
+        'achievements:{gameId}:*',
+        'validation_result:{gameId}:*'
+      ]
+    };
+
+    const patterns = invalidationMap[dataType] || [];
+    const context = { playerId: entityId, gameId: gameId || '*' };
+
+    for (const pattern of patterns) {
+      try {
+        const resolvedPattern = this.buildInvalidationPattern(pattern, context);
+        await this.invalidatePattern(resolvedPattern);
+      } catch (error) {
+        console.error(`Error in smart invalidation for pattern ${pattern}:`, error);
       }
     }
   }
@@ -279,6 +336,43 @@ export class CacheManager extends EventEmitter {
   }
 
   /**
+   * Get detailed performance metrics
+   */
+  async getDetailedMetrics(): Promise<DetailedCacheMetrics> {
+    try {
+      const info = await this.redisClient.info('memory');
+      const keyCount = await this.redisClient.dbSize();
+      
+      // Parse Redis memory info
+      const memoryStats = this.parseRedisMemoryInfo(info);
+      
+      // Calculate percentiles for response times
+      const responseTimePercentiles = this.calculatePercentiles(this.responseTimes);
+      
+      return {
+        ...this.metrics,
+        keyCount,
+        memoryStats,
+        responseTimePercentiles,
+        cacheEfficiency: this.calculateCacheEfficiency(),
+        topKeys: await this.getTopAccessedKeys(),
+        errorRate: this.metrics.totalRequests > 0 ? (this.metrics.errors / this.metrics.totalRequests) * 100 : 0
+      };
+    } catch (error) {
+      console.error('Error getting detailed metrics:', error);
+      return {
+        ...this.metrics,
+        keyCount: 0,
+        memoryStats: {},
+        responseTimePercentiles: {},
+        cacheEfficiency: 0,
+        topKeys: [],
+        errorRate: 0
+      };
+    }
+  }
+
+  /**
    * Reset cache metrics
    */
   resetMetrics(): void {
@@ -286,6 +380,60 @@ export class CacheManager extends EventEmitter {
     this.responseTimes = [];
     
     this.emit('cache:metrics_reset');
+  }
+
+  /**
+   * Get cache health status
+   */
+  async getHealthStatus(): Promise<CacheHealthStatus> {
+    try {
+      const startTime = Date.now();
+      await this.redisClient.ping();
+      const pingTime = Date.now() - startTime;
+      
+      const metrics = await this.getDetailedMetrics();
+      
+      let status: 'HEALTHY' | 'DEGRADED' | 'UNHEALTHY' = 'HEALTHY';
+      const issues: string[] = [];
+      
+      // Check various health indicators
+      if (pingTime > 100) {
+        status = 'DEGRADED';
+        issues.push(`High Redis latency: ${pingTime}ms`);
+      }
+      
+      if (metrics.hitRate < 50) {
+        status = 'DEGRADED';
+        issues.push(`Low cache hit rate: ${metrics.hitRate.toFixed(1)}%`);
+      }
+      
+      if (metrics.errorRate > 5) {
+        status = 'UNHEALTHY';
+        issues.push(`High error rate: ${metrics.errorRate.toFixed(1)}%`);
+      }
+      
+      if (this.config.maxMemoryUsage > 0 && metrics.memoryUsage > this.config.maxMemoryUsage * 0.9) {
+        status = 'DEGRADED';
+        issues.push(`Memory usage near limit: ${(metrics.memoryUsage / this.config.maxMemoryUsage * 100).toFixed(1)}%`);
+      }
+      
+      return {
+        status,
+        pingTime,
+        issues,
+        metrics,
+        timestamp: Date.now()
+      };
+      
+    } catch (error) {
+      return {
+        status: 'UNHEALTHY',
+        pingTime: -1,
+        issues: [`Redis connection error: ${error.message}`],
+        metrics: this.metrics,
+        timestamp: Date.now()
+      };
+    }
   }
 
   /**
@@ -382,7 +530,16 @@ export class CacheManager extends EventEmitter {
    */
   async shutdown(): Promise<void> {
     try {
-      if (this.redisClient) {
+      // Clear intervals
+      if (this.metricsInterval) {
+        clearInterval(this.metricsInterval);
+      }
+      if (this.cleanupInterval) {
+        clearInterval(this.cleanupInterval);
+      }
+
+      // Disconnect Redis
+      if (this.redisClient && this.redisClient.isOpen) {
         await this.redisClient.quit();
       }
       
@@ -394,46 +551,173 @@ export class CacheManager extends EventEmitter {
     }
   }
 
+  /**
+   * Start performance monitoring
+   */
+  private startPerformanceMonitoring(): void {
+    if (!this.config.metricsEnabled) return;
+
+    // Update metrics every 30 seconds
+    this.metricsInterval = setInterval(async () => {
+      try {
+        await this.updateMemoryMetrics();
+        this.emit('cache:metrics_updated', this.metrics);
+      } catch (error) {
+        console.error('Error updating cache metrics:', error);
+      }
+    }, 30000);
+  }
+
+  /**
+   * Start cleanup scheduler
+   */
+  private startCleanupScheduler(): void {
+    // Run cleanup every 5 minutes
+    this.cleanupInterval = setInterval(async () => {
+      try {
+        await this.cleanup();
+      } catch (error) {
+        console.error('Error during scheduled cleanup:', error);
+      }
+    }, 300000);
+  }
+
+  /**
+   * Update memory usage metrics from Redis
+   */
+  private async updateMemoryMetrics(): Promise<void> {
+    try {
+      const info = await this.redisClient.info('memory');
+      const keyCount = await this.redisClient.dbSize();
+      
+      // Parse memory info
+      const memoryMatch = info.match(/used_memory:(\d+)/);
+      if (memoryMatch) {
+        this.metrics.memoryUsage = parseInt(memoryMatch[1], 10);
+      }
+      
+      this.metrics.keyCount = keyCount;
+      
+      // Check memory usage against limit
+      if (this.config.maxMemoryUsage > 0 && this.metrics.memoryUsage > this.config.maxMemoryUsage) {
+        console.warn(`Cache memory usage (${this.metrics.memoryUsage}) exceeds limit (${this.config.maxMemoryUsage})`);
+        this.emit('cache:memory_warning', { 
+          usage: this.metrics.memoryUsage, 
+          limit: this.config.maxMemoryUsage 
+        });
+        
+        // Trigger aggressive cleanup
+        await this.aggressiveCleanup();
+      }
+      
+    } catch (error) {
+      console.error('Error updating memory metrics:', error);
+    }
+  }
+
+  /**
+   * Aggressive cleanup when memory limit is exceeded
+   */
+  private async aggressiveCleanup(): Promise<void> {
+    try {
+      console.log('Starting aggressive cache cleanup due to memory pressure');
+      
+      // Get all keys with our prefix
+      const keys = await this.redisClient.keys(`${this.config.redis.keyPrefix}:*`);
+      
+      // Get TTL and access info for all keys
+      const keyInfoPromises = keys.map(async (key) => {
+        try {
+          const ttl = await this.redisClient.ttl(key);
+          const data = await this.redisClient.get(key);
+          
+          if (data) {
+            const entry: CacheEntry = JSON.parse(data);
+            return {
+              key,
+              ttl,
+              lastAccessed: entry.lastAccessed,
+              accessCount: entry.accessCount,
+              size: entry.size
+            };
+          }
+        } catch (error) {
+          return null;
+        }
+      });
+
+      const keyInfos = (await Promise.all(keyInfoPromises)).filter(Boolean);
+      
+      // Sort by least recently used and lowest access count
+      keyInfos.sort((a, b) => {
+        if (a.accessCount !== b.accessCount) {
+          return a.accessCount - b.accessCount;
+        }
+        return a.lastAccessed - b.lastAccessed;
+      });
+
+      // Remove 25% of least used keys
+      const keysToRemove = keyInfos.slice(0, Math.floor(keyInfos.length * 0.25));
+      
+      if (keysToRemove.length > 0) {
+        const keysToDelete = keysToRemove.map(info => info.key);
+        const deletedCount = await this.redisClient.del(keysToDelete);
+        
+        this.metrics.evictions += deletedCount;
+        
+        console.log(`Aggressive cleanup completed: ${deletedCount} keys removed`);
+        this.emit('cache:aggressive_cleanup', { keysRemoved: deletedCount });
+      }
+      
+    } catch (error) {
+      console.error('Error during aggressive cleanup:', error);
+    }
+  }
+
   // Private methods
 
   private async initializeRedis(): Promise<void> {
-    // Note: In a real implementation, you would use the actual Redis client
-    // For now, we'll simulate the Redis setup
-    
-    this.redisClient = {
-      get: async (key: string) => {
-        // Simulate Redis get operation
-        return null; // No cached data initially
-      },
-      setex: async (key: string, ttl: number, value: string) => {
-        // Simulate Redis setex operation
-        console.log(`Redis SETEX: ${key} (TTL: ${ttl}s)`);
-      },
-      del: async (...keys: string[]) => {
-        // Simulate Redis delete operation
-        console.log(`Redis DEL: ${keys.join(', ')}`);
-        return keys.length;
-      },
-      keys: async (pattern: string) => {
-        // Simulate Redis keys operation
-        return [];
-      },
-      info: async (section: string) => {
-        // Simulate Redis info operation
-        return 'used_memory:1048576\nused_memory_human:1.00M';
-      },
-      dbsize: async () => {
-        // Simulate Redis dbsize operation
-        return 0;
-      },
-      ttl: async (key: string) => {
-        // Simulate Redis TTL operation
-        return -1; // Key exists but has no TTL
-      },
-      quit: async () => {
+    try {
+      // Create Redis client with configuration
+      this.redisClient = createClient({
+        socket: {
+          host: this.config.redis.host,
+          port: this.config.redis.port,
+        },
+        password: this.config.redis.password,
+        database: this.config.redis.db,
+        name: 'universal-gaming-hub-cache'
+      });
+
+      // Set up error handling
+      this.redisClient.on('error', (error) => {
+        console.error('Redis client error:', error);
+        this.metrics.errors++;
+        this.emit('cache:redis_error', { error });
+      });
+
+      this.redisClient.on('connect', () => {
+        console.log('Redis client connected');
+        this.emit('cache:redis_connected');
+      });
+
+      this.redisClient.on('disconnect', () => {
         console.log('Redis client disconnected');
-      }
-    };
+        this.emit('cache:redis_disconnected');
+      });
+
+      // Connect to Redis
+      await this.redisClient.connect();
+      
+      // Test connection
+      await this.redisClient.ping();
+      
+      console.log(`Redis connected to ${this.config.redis.host}:${this.config.redis.port}`);
+      
+    } catch (error) {
+      console.error('Failed to initialize Redis:', error);
+      throw new Error(`Redis initialization failed: ${error.message}`);
+    }
   }
 
   private setupInvalidationStrategies(): void {
@@ -547,4 +831,92 @@ export class CacheManager extends EventEmitter {
       lastResetTime: Date.now()
     };
   }
+
+  private parseRedisMemoryInfo(info: string): Record<string, any> {
+    const stats: Record<string, any> = {};
+    const lines = info.split('\r\n');
+    
+    for (const line of lines) {
+      if (line.includes(':')) {
+        const [key, value] = line.split(':');
+        if (key && value) {
+          stats[key] = isNaN(Number(value)) ? value : Number(value);
+        }
+      }
+    }
+    
+    return stats;
+  }
+
+  private calculatePercentiles(values: number[]): Record<string, number> {
+    if (values.length === 0) return {};
+    
+    const sorted = [...values].sort((a, b) => a - b);
+    
+    return {
+      p50: this.getPercentile(sorted, 50),
+      p90: this.getPercentile(sorted, 90),
+      p95: this.getPercentile(sorted, 95),
+      p99: this.getPercentile(sorted, 99)
+    };
+  }
+
+  private getPercentile(sortedArray: number[], percentile: number): number {
+    const index = Math.ceil((percentile / 100) * sortedArray.length) - 1;
+    return sortedArray[Math.max(0, index)] || 0;
+  }
+
+  private calculateCacheEfficiency(): number {
+    if (this.metrics.totalRequests === 0) return 0;
+    
+    // Efficiency considers hit rate and average response time
+    const hitRateScore = this.metrics.hitRate / 100;
+    const responseTimeScore = Math.max(0, 1 - (this.metrics.averageResponseTime / 1000)); // Normalize to 1 second
+    
+    return (hitRateScore * 0.7 + responseTimeScore * 0.3) * 100;
+  }
+
+  private async getTopAccessedKeys(limit: number = 10): Promise<Array<{key: string, accessCount: number}>> {
+    try {
+      const keys = await this.redisClient.keys(`${this.config.redis.keyPrefix}:*`);
+      const keyStats: Array<{key: string, accessCount: number}> = [];
+      
+      for (const key of keys.slice(0, 100)) { // Limit to first 100 keys for performance
+        try {
+          const data = await this.redisClient.get(key);
+          if (data) {
+            const entry: CacheEntry = JSON.parse(data);
+            keyStats.push({ key, accessCount: entry.accessCount });
+          }
+        } catch (error) {
+          // Skip invalid entries
+        }
+      }
+      
+      return keyStats
+        .sort((a, b) => b.accessCount - a.accessCount)
+        .slice(0, limit);
+        
+    } catch (error) {
+      console.error('Error getting top accessed keys:', error);
+      return [];
+    }
+  }
+}
+
+// Additional interfaces for enhanced metrics
+export interface DetailedCacheMetrics extends CacheMetrics {
+  memoryStats: Record<string, any>;
+  responseTimePercentiles: Record<string, number>;
+  cacheEfficiency: number;
+  topKeys: Array<{key: string, accessCount: number}>;
+  errorRate: number;
+}
+
+export interface CacheHealthStatus {
+  status: 'HEALTHY' | 'DEGRADED' | 'UNHEALTHY';
+  pingTime: number;
+  issues: string[];
+  metrics: CacheMetrics;
+  timestamp: Timestamp;
 }
