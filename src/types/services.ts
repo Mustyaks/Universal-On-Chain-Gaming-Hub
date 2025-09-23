@@ -15,7 +15,8 @@ import {
   ApiResponse,
   PaginatedResponse,
   Address,
-  Timestamp
+  Timestamp,
+  CrossGameAsset
 } from './core';
 
 // Game Adapter Interface
@@ -48,7 +49,7 @@ export interface ProfileService {
 export interface AggregatedData {
   totalAchievements: number;
   totalAssets: number;
-  crossGameAssets: GameAsset[];
+  crossGameAssets: CrossGameAsset[];
   recentAchievements: Achievement[];
   gameStatistics: Record<string, any>;
 }
